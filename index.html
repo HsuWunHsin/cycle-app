@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="月之週期">
@@ -19,8 +19,11 @@
   --pink:#c0576a; --purple:#8b7fd4; --teal:#4db896; --amber:#d4974d;
   --r:14px; --rs:8px;
   font-family:-apple-system,'Noto Sans TC',sans-serif;
+  font-size:16px;
 }
-html,body{height:100%;background:var(--bg);color:var(--text);overflow:hidden;}
+html{font-size:16px;-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+body{height:100%;background:var(--bg);color:var(--text);overflow:hidden;font-size:1rem;}
+input,textarea,select,button{font-size:16px;}
 #app{height:100dvh;display:flex;flex-direction:column-reverse;overflow:hidden;}
 
 /* ── Nav ── */
@@ -130,7 +133,39 @@ html,body{height:100%;background:var(--bg);color:var(--text);overflow:hidden;}
 .canvas-wrap{position:relative;height:260px;margin:0 8px 8px;}
 canvas{width:100%!important;}
 
-/* ── Weight ── */
+/* ── Phase Weight Cards ── */
+.phase-weight-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 13px 12px;}
+.pw-card{background:var(--surface);border:.5px solid var(--border);border-radius:var(--r);
+  padding:12px;border-left-width:3px!important;}
+.pw-header{display:flex;align-items:center;gap:5px;margin-bottom:8px;}
+.pw-icon{font-size:14px;}
+.pw-name{font-size:12px;font-weight:500;flex:1;}
+.pw-days{font-size:10px;color:var(--text3);}
+.pw-avg{font-size:24px;font-weight:600;color:var(--text);line-height:1.1;}
+.pw-unit{font-size:13px;font-weight:400;color:var(--text2);}
+.pw-diff{font-size:11px;margin:2px 0 6px;}
+.pw-range{display:flex;align-items:center;gap:5px;font-size:10px;margin-bottom:2px;}
+.pw-range-bar{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden;}
+.pw-range-fill{height:100%;width:100%;border-radius:2px;opacity:.6;}
+.pw-sub{font-size:10px;color:var(--text3);}
+.pw-nodata{font-size:13px;color:var(--text3);text-align:center;padding:12px 0;line-height:1.8;}
+
+/* ── Today weight prediction ── */
+.today-weight-card{
+  margin:0 13px 12px;background:var(--surface);
+  border:.5px solid var(--border);border-radius:var(--r);
+  padding:12px 14px;border-left-width:3px!important;
+}
+.tw-label{font-size:11px;font-weight:500;margin-bottom:6px;letter-spacing:.03em;}
+.tw-row{display:flex;align-items:baseline;gap:10px;}
+.tw-val{font-size:22px;font-weight:600;color:var(--text);}
+.tw-sub{font-size:12px;color:var(--text3);}
+
+/* ── Weight stats (old, keep for compat) ── */
+.weight-stats{display:grid;grid-template-columns:repeat(2,1fr);gap:7px;padding:0 13px 12px;}
+.wstat-card{background:var(--surface);border:.5px solid var(--border);border-radius:var(--rs);padding:11px;text-align:center;}
+.wstat-val{font-size:18px;font-weight:600;color:var(--text);margin-bottom:3px;}
+.wstat-label{font-size:10px;color:var(--text3);}
 .weight-hint{padding:0 13px 10px;}
 .hint-bar{font-size:12px;padding:8px 13px;border-radius:var(--rs);line-height:1.5;}
 .hint-warn{background:rgba(212,151,77,.15);color:#d4a84d;border-left:2px solid #d4a84d;}
@@ -777,127 +812,195 @@ function renderChart(c, user) {
 // ── 體重分析 ──────────────────────────────────────────────────
 function renderWeight(c, user) {
   c.innerHTML = '';
-  const delta = weightDeltaCurve(user);
-  const avg   = weightAvgCurve(user);
-  const day   = cycleDay(user);
-  const filled = avg.filter(v=>v!==null);
-  const dataCount = weightSlots(user).filter(s=>s.length>0).length;
+  const slots    = weightSlots(user);       // 28個slot，每個存該天所有實測體重
+  const avg      = weightAvgCurve(user);    // 28個平均值（null=無資料）
+  const delta    = weightDeltaCurve(user);  // 相對基準的變化量
+  const day      = cycleDay(user);
+  const filled   = avg.filter(v=>v!==null);
+  const dataCount= slots.filter(s=>s.length>0).length;
 
+  // ── 標題 ──
   const head = el('div','chart-head');
   head.innerHTML = `<div class="chart-title">⚖️ 體重週期分析</div>
     <div class="chart-daybadge">${dataCount}/28 天有資料</div>`;
   c.appendChild(head);
 
-  // Hint bar
+  // ── 資料提示 ──
   const hint = el('div','weight-hint');
   const [hcls,htxt] = dataCount<7
-    ? ['hint-warn',`已記錄 ${dataCount} 天，累積 7 天以上可看到個人趨勢`]
+    ? ['hint-warn',`還需要更多資料，累積 7 天以上可看到個人趨勢`]
     : dataCount<20
-    ? ['hint-ok',  `已記錄 ${dataCount} 天，個人週期曲線成形中 📈`]
-    : ['hint-great',`已記錄 ${dataCount} 天，個人化曲線完整度高 ✓`];
+    ? ['hint-ok',  `個人週期曲線成形中，繼續每天記錄 📈`]
+    : ['hint-great',`資料量充足，預測準確度高 ✓`];
   hint.innerHTML = `<div class="hint-bar ${hcls}">${htxt}</div>`;
   c.appendChild(hint);
 
-  // Stats
-  if (filled.length > 0) {
-    const minW = Math.min(...filled), maxW = Math.max(...filled);
-    const peakDay = avg.indexOf(filled.reduce((a,b)=>a>b?a:b,  -Infinity))+1;
-    const lowDay  = avg.indexOf(filled.reduce((a,b)=>a<b?a:b,   Infinity))+1;
-    const curDelta = delta[day-1] ?? REF.weight[day-1];
-    const stat = el('div','weight-stats');
-    stat.innerHTML = `
-      <div class="wstat-card"><div class="wstat-val">${minW.toFixed(1)} kg</div><div class="wstat-label">最低（第${lowDay}天）</div></div>
-      <div class="wstat-card"><div class="wstat-val">${maxW.toFixed(1)} kg</div><div class="wstat-label">最高（第${peakDay}天）</div></div>
-      <div class="wstat-card"><div class="wstat-val">±${((maxW-minW)/2).toFixed(1)} kg</div><div class="wstat-label">週期波動</div></div>
-      <div class="wstat-card"><div class="wstat-val" style="color:#4db896">${curDelta>=0?'+':''}${curDelta.toFixed(1)} kg</div><div class="wstat-label">今日預測</div></div>`;
-    c.appendChild(stat);
-  }
+  // ── 四大時期歸類統計 ──
+  // 計算每個時期的實測體重均值、最小、最大
+  const phaseRanges = [
+    { name:'月經期', days:[0,4],   color:'#c0576a', bg:'rgba(192,87,106,0.12)', icon:'🩸' },
+    { name:'卵泡期', days:[5,12],  color:'#8b7fd4', bg:'rgba(139,127,212,0.12)',icon:'🌱' },
+    { name:'排卵期', days:[13,13], color:'#4db896', bg:'rgba(77,184,150,0.15)', icon:'🌸' },
+    { name:'黃體期', days:[14,27], color:'#d4974d', bg:'rgba(212,151,77,0.12)', icon:'🌙' },
+  ];
 
-  // Chart
-  const wrap = el('div','canvas-wrap'); wrap.style.height='230px';
+  // 基準體重 = 所有有資料的天取絕對平均（非delta）
+  const allAbsWeights = slots.flat();
+  const baseWeight = allAbsWeights.length > 0
+    ? allAbsWeights.reduce((a,b)=>a+b,0)/allAbsWeights.length
+    : null;
+
+  const phaseCards = el('div','phase-weight-grid');
+  phaseRanges.forEach(ph => {
+    const phSlots = slots.slice(ph.days[0], ph.days[1]+1);
+    const phWeights = phSlots.flat();
+    const phAvg = phWeights.length > 0
+      ? phWeights.reduce((a,b)=>a+b,0)/phWeights.length : null;
+    const phMin = phWeights.length > 0 ? Math.min(...phWeights) : null;
+    const phMax = phWeights.length > 0 ? Math.max(...phWeights) : null;
+    const phDays = phSlots.filter(s=>s.length>0).length;
+    // 相對整體均值的偏移
+    const diff = (phAvg !== null && baseWeight !== null)
+      ? phAvg - baseWeight : null;
+
+    const card = el('div','pw-card');
+    card.style.cssText = `border-color:${ph.color};`;
+    card.innerHTML = `
+      <div class="pw-header" style="color:${ph.color}">
+        <span class="pw-icon">${ph.icon}</span>
+        <span class="pw-name">${ph.name}</span>
+        <span class="pw-days">${phDays}/${ph.days[1]-ph.days[0]+1}天有記錄</span>
+      </div>
+      ${phAvg !== null ? `
+        <div class="pw-avg">${phAvg.toFixed(1)} <span class="pw-unit">kg</span></div>
+        <div class="pw-diff" style="color:${diff>=0?'#e87070':'#4db896'}">
+          ${diff>=0?'▲':'▼'} 較均值 ${diff>=0?'+':''}${diff.toFixed(1)} kg
+        </div>
+        <div class="pw-range">
+          <span style="color:#4db896">↓${phMin.toFixed(1)}</span>
+          <div class="pw-range-bar">
+            <div class="pw-range-fill" style="background:${ph.color}"></div>
+          </div>
+          <span style="color:#e87070">↑${phMax.toFixed(1)}</span>
+        </div>
+        <div class="pw-sub">波動 ±${((phMax-phMin)/2).toFixed(1)} kg</div>
+      ` : `
+        <div class="pw-nodata">尚無記錄<br><span style="font-size:10px;color:var(--text3)">在此時期補填體重</span></div>
+      `}`;
+    phaseCards.appendChild(card);
+  });
+  c.appendChild(phaseCards);
+
+  // ── 今日體重預測 ──
+  const curPhase = dayPhase(day);
+  const curDelta = delta[day-1];
+  // 找今日所在時期的平均
+  const todayPhR = phaseRanges.find(p=>day-1>=p.days[0]&&day-1<=p.days[1]);
+  const todaySlots = todayPhR ? slots.slice(todayPhR.days[0],todayPhR.days[1]+1).flat() : [];
+  const todayPhaseAvg = todaySlots.length>0
+    ? todaySlots.reduce((a,b)=>a+b,0)/todaySlots.length : null;
+
+  const todayCard = el('div','today-weight-card');
+  todayCard.style.borderColor = curPhase.color;
+  todayCard.innerHTML = `
+    <div class="tw-label" style="color:${curPhase.color}">今天（第 ${day} 天・${curPhase.name}）預測</div>
+    <div class="tw-row">
+      ${todayPhaseAvg !== null
+        ? `<div class="tw-val">${todayPhaseAvg.toFixed(1)} kg</div>
+           <div class="tw-sub">根據你在${curPhase.name}的平均體重</div>`
+        : curDelta !== null
+        ? `<div class="tw-val">${curDelta>=0?'+':''}${curDelta.toFixed(1)} kg</div>
+           <div class="tw-sub">相對基準的預測變化</div>`
+        : `<div class="tw-val" style="color:var(--text3)">—</div>
+           <div class="tw-sub">補填更多資料後可預測</div>`
+      }
+    </div>`;
+  c.appendChild(todayCard);
+
+  // ── 28天曲線圖 ──
+  const chartTitle = el('div','');
+  chartTitle.style.cssText = 'font-size:12px;color:var(--text3);padding:4px 14px 6px;';
+  chartTitle.textContent = '28天體重變化趨勢（相對均值）';
+  c.appendChild(chartTitle);
+
+  const wrap = el('div','canvas-wrap'); wrap.style.height='180px';
   const canvas = document.createElement('canvas');
-  canvas.setAttribute('aria-label','個人體重週期曲線');
+  canvas.setAttribute('aria-label','28天體重週期曲線');
   wrap.appendChild(canvas);
   c.appendChild(wrap);
 
-  const leg = el('div','chart-legend'); leg.style.padding='6px 14px 10px';
-  leg.innerHTML = `
-    <span class="legend-item"><span class="leg-swatch" style="background:#7fa8e8"></span>個人實測</span>
-    <span class="legend-item"><span class="leg-swatch" style="background:rgba(127,168,232,0.35)"></span>推算補全</span>
-    <span class="legend-item"><span class="leg-swatch" style="background:none;border-top:2px dashed #666"></span>參考曲線</span>`;
-  c.appendChild(leg);
-
-  const todayDotPlugin = {
-    id:'todayDot',
-    afterDatasetsDraw(chart){
-      const {ctx,scales} = chart;
-      const yVal = delta[day-1]!==null ? delta[day-1] : REF.weight[day-1];
-      const x = scales.x.getPixelForValue(day-1);
-      const y = scales.y.getPixelForValue(yVal);
+  // ── 時期色塊背景 plugin ──
+  const phaseBgPlugin = {
+    id:'phaseBg',
+    beforeDraw(chart) {
+      const {ctx,chartArea,scales} = chart;
+      const bands = [
+        {from:0,to:4,   color:'rgba(192,87,106,0.08)'},
+        {from:5,to:12,  color:'rgba(139,127,212,0.06)'},
+        {from:13,to:13, color:'rgba(77,184,150,0.12)'},
+        {from:14,to:27, color:'rgba(212,151,77,0.06)'},
+      ];
+      bands.forEach(b=>{
+        const x1=scales.x.getPixelForValue(b.from);
+        const x2=scales.x.getPixelForValue(b.to);
+        ctx.save();
+        ctx.fillStyle=b.color;
+        ctx.fillRect(x1,chartArea.top,x2-x1,chartArea.height);
+        ctx.restore();
+      });
+      // today line
+      const tx=scales.x.getPixelForValue(day-1);
       ctx.save();
-      ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2);
-      ctx.fillStyle='#e87fa0'; ctx.fill();
-      ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
-      ctx.restore();
+      ctx.beginPath();ctx.moveTo(tx,chartArea.top);ctx.lineTo(tx,chartArea.bottom);
+      ctx.strokeStyle='rgba(255,255,255,0.2)';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
+      ctx.stroke();ctx.restore();
     }
   };
 
-  setTimeout(() => {
-    if (S.weightInst) { S.weightInst.destroy(); S.weightInst=null; }
-    const days = Array.from({length:28},(_,i)=>i+1);
-    const measured  = delta.map(v=>v!==null?v:null);
-    const predicted = delta.map((v,i)=>v===null?REF.weight[i]:null);
-    S.weightInst = new Chart(canvas, {
-      type:'line', plugins:[todayDotPlugin],
-      data:{ labels:days, datasets:[
-        {label:'個人實測',data:measured,borderColor:'#7fa8e8',backgroundColor:'rgba(127,168,232,0.12)',
-         borderWidth:2.5,pointRadius:measured.map(v=>v!==null?4:0),pointBackgroundColor:'#7fa8e8',
-         tension:0.4,fill:true,spanGaps:false},
-        {label:'推算',data:predicted,borderColor:'rgba(127,168,232,0.4)',backgroundColor:'transparent',
+  setTimeout(()=>{
+    if(S.weightInst){S.weightInst.destroy();S.weightInst=null;}
+    const days28=Array.from({length:28},(_,i)=>i+1);
+    const measured =delta.map(v=>v!==null?+(v.toFixed(2)):null);
+    const predicted=delta.map((v,i)=>v===null?+(REF.weight[i].toFixed(2)):null);
+    S.weightInst=new Chart(canvas,{
+      type:'line',plugins:[phaseBgPlugin],
+      data:{labels:days28,datasets:[
+        {label:'個人實測',data:measured,
+         borderColor:'#7fa8e8',backgroundColor:'rgba(127,168,232,0.15)',
+         borderWidth:2.5,pointRadius:measured.map(v=>v!==null?3:0),
+         pointBackgroundColor:'#7fa8e8',tension:0.4,fill:true,spanGaps:false},
+        {label:'推算',data:predicted,
+         borderColor:'rgba(127,168,232,0.3)',backgroundColor:'transparent',
          borderWidth:1.5,borderDash:[4,4],pointRadius:0,tension:0.4,spanGaps:false},
-        {label:'參考',data:REF.weight,borderColor:'rgba(180,180,180,0.3)',backgroundColor:'transparent',
-         borderWidth:1,borderDash:[3,3],pointRadius:0,tension:0.4},
       ]},
       options:{
         responsive:true,maintainAspectRatio:false,
         interaction:{mode:'index',intersect:false},
         plugins:{
           legend:{display:false},
-          tooltip:{backgroundColor:'rgba(16,4,12,0.95)',titleColor:'#fff',bodyColor:'#bbb',
-            borderColor:'rgba(255,255,255,0.1)',borderWidth:1,padding:10,
+          tooltip:{
+            backgroundColor:'rgba(16,4,12,0.95)',titleColor:'#fff',bodyColor:'#bbb',
+            borderColor:'rgba(255,255,255,0.1)',borderWidth:1,padding:8,
             callbacks:{
-              title:items=>`第 ${items[0].label} 天 · ${dayPhase(parseInt(items[0].label)).name}`,
-              label:item=>item.raw!==null?` ${['個人均值','推算值','參考值'][item.datasetIndex]}: ${item.raw>=0?'+':''}${item.raw} kg`:null,
+              title:items=>`第${items[0].label}天・${dayPhase(+items[0].label).name}`,
+              label:item=>item.raw!==null?` ${item.raw>=0?'+':''}${item.raw} kg`:'',
               filter:item=>item.raw!==null,
             }
           }
         },
         scales:{
-          x:{ticks:{color:'#888',font:{size:10},callback:(v,i)=>(i+1)%7===0||(i+1)===1?`第${i+1}天`:''},grid:{color:'rgba(255,255,255,0.04)'}},
-          y:{ticks:{color:'#888',font:{size:10},callback:v=>(v>=0?'+':'')+v.toFixed(1)+' kg'},grid:{color:'rgba(255,255,255,0.05)'}},
+          x:{ticks:{color:'#888',font:{size:10},
+            callback:(v,i)=>(i+1)%7===0||(i+1)===1?`第${i+1}天`:''},
+            grid:{color:'rgba(255,255,255,0.04)'}},
+          y:{ticks:{color:'#888',font:{size:10},
+            callback:v=>(v>=0?'+':'')+v.toFixed(1)+'kg'},
+            grid:{color:'rgba(255,255,255,0.05)'},
+            title:{display:true,text:'相對均值(kg)',color:'#888',font:{size:9}}},
         },
         animation:{duration:400},
       }
     });
-  }, 50);
-
-  // Recent weight logs
-  const recentW = Object.entries(user.logs||{})
-    .filter(([,l])=>l.weight).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,10);
-  if (recentW.length > 0) {
-    const hist = el('div','log-history');
-    hist.innerHTML = '<div class="hist-title">最近體重記錄</div>';
-    recentW.forEach(([date,log]) => {
-      const d = dateToCycleDay(user, date);
-      const ph = dayPhase(d);
-      const row = el('div','hist-row');
-      row.innerHTML = `<div><span class="hist-date">${date}</span>
-        <span style="font-size:10px;color:${ph.color};margin-left:6px">第${d}天 ${ph.name}</span></div>
-        <span class="hist-vals">${parseFloat(log.weight).toFixed(1)} kg</span>`;
-      hist.appendChild(row);
-    });
-    c.appendChild(hist);
-  }
+  },50);
 }
 
 // ── 日誌記錄（含日期導覽）────────────────────────────────────
@@ -1095,11 +1198,15 @@ function renderPeriod(c, user) {
     <div class="period-add-form">
       <div class="period-add-row">
         <label class="period-add-label">開始日</label>
-        <input type="date" id="ps-start" max="${today()}" class="period-date-input">
+        <input type="date" id="ps-start" max="${today()}" class="period-date-input" oninput="updateEndPreview()">
       </div>
       <div class="period-add-row">
-        <label class="period-add-label">結束日</label>
-        <input type="date" id="ps-end" max="${today()}" class="period-date-input">
+        <label class="period-add-label">持續天數</label>
+        <div style="display:flex;align-items:center;gap:8px;flex:1">
+          <input type="number" id="ps-days" min="1" max="12" value="5" class="period-date-input" style="width:70px;text-align:center" oninput="updateEndPreview()">
+          <span style="font-size:12px;color:var(--text3)">天</span>
+          <span id="ps-end-preview" style="font-size:11px;color:var(--teal)"></span>
+        </div>
       </div>
       <div class="period-add-row">
         <label class="period-add-label">備註</label>
@@ -1139,19 +1246,33 @@ function renderPeriod(c, user) {
   }
 }
 
+window.updateEndPreview = () => {
+  const start = document.getElementById('ps-start')?.value;
+  const days  = parseInt(document.getElementById('ps-days')?.value)||5;
+  const prev  = document.getElementById('ps-end-preview');
+  if (!prev) return;
+  if (!start) { prev.textContent=''; return; }
+  const endDate = new Date(start);
+  endDate.setDate(endDate.getDate() + days - 1);
+  prev.textContent = '→ 結束：' + endDate.toISOString().slice(0,10);
+};
+
 window.addPeriod = () => {
   const start = document.getElementById('ps-start').value;
-  const end   = document.getElementById('ps-end').value;
+  const days  = parseInt(document.getElementById('ps-days').value)||5;
   const note  = document.getElementById('ps-note').value.trim();
   if (!start) { alert('請選擇月經開始日'); return; }
-  if (end && end < start) { alert('結束日不能早於開始日'); return; }
+  if (days < 1 || days > 12) { alert('天數請填 1–12 天'); return; }
+  const endDate = new Date(start);
+  endDate.setDate(endDate.getDate() + days - 1);
+  const end = endDate.toISOString().slice(0,10);
   const user = u();
   if (!user.periodHistory) user.periodHistory = [];
   if (user.periodHistory.find(h=>h.start===start)) {
     if (!confirm(`${start} 已有記錄，要覆蓋嗎？`)) return;
     user.periodHistory = user.periodHistory.filter(h=>h.start!==start);
   }
-  user.periodHistory.push({start, end:end||null, note:note||null});
+  user.periodHistory.push({start, end, note:note||null});
   applyStatsToUser(user);
   persist(); renderPeriod(document.querySelector('.main-content'), user);
 };
