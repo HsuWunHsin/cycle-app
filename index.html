@@ -504,16 +504,16 @@ function applyStatsToUser(user) {
 
 // ── 體重分析 ──────────────────────────────────────────────────
 function weightSlots(user) {
-  const slots = Array.from({length:28}, ()=>[]);
+  const len   = user.cycleLen || 28;           // ← 用使用者真實週期長度
+  const slots = Array.from({length: len}, ()=>[]); // ← 不再寫死28
   if (!user?.cycleStart || !user?.logs) return slots;
-  const len   = user.cycleLen || 28;
   const start = new Date(user.cycleStart).getTime();
   Object.entries(user.logs).forEach(([ds, log]) => {
     const w = parseFloat(log.weight);
     if (isNaN(w)) return;
     const diff = Math.floor((new Date(ds).getTime() - start) / 86400000);
     const idx  = ((diff % len) + len) % len;
-    if (idx < 28) slots[idx].push(w);
+    if (idx < len) slots[idx].push(w);          // ← 上限改成 len
   });
   return slots;
 }
@@ -527,74 +527,91 @@ function weightAvgCurve(user) {
 function weightDeltaCurve(user) {
   const avg = weightAvgCurve(user);
   const base = avg.slice(0,5).filter(v=>v!==null);
-  if (!base.length) return REF.weight.map((v,i) => avg[i] !== null ? avg[i] : null);
+  if (!base.length) return avg.map(() => null);
   const b = base.reduce((a,c)=>a+c,0)/base.length;
   return avg.map(v => v === null ? null : +(v-b).toFixed(2));
 }
 
-// ── 智慧體重預測（核心新功能）────────────────────────────────
-// 根據圖形的三段特徵（月經低、排卵前小峰、黃體期高）
-// 配合使用者實際週期長度和體重基準，產出個人化預測曲線
-
+// ── 個人化體重預測曲線 ────────────────────────────────────────
+// 預測線 = 形狀曲線（永遠是推算值，不塞實測）
+// 實測線 = 只有真正量過體重的天才有值
 function buildPersonalWeightCurve(user) {
-  const cycleLen = user.cycleLen || 28;
-  const slots    = weightSlots(user);
-  const avgCurve = weightAvgCurve(user); // 28格，null=無資料
+  const cycleLen  = user.cycleLen || 28;
+  const slots     = weightSlots(user);          // 長度 = cycleLen
+  const avgCurve  = weightAvgCurve(user);       // 長度 = cycleLen，null=無資料
 
-  // 1. 找基準體重：優先用月經期（第1-5天）均值，其次用全部均值
-  const menstrualW = slots.slice(0, Math.min(5, cycleLen))
-    .flat().filter(v => !isNaN(v));
-  const allW = slots.flat().filter(v => !isNaN(v));
+  // 基準體重：用月經期前5天均值，其次全部均值
+  const menstrualW = slots.slice(0, Math.min(5, cycleLen)).flat();
+  const allW       = slots.flat();
   const baseW = menstrualW.length >= 2
-    ? menstrualW.reduce((a,b)=>a+b,0)/menstrualW.length
+    ? menstrualW.reduce((a,b)=>a+b,0) / menstrualW.length
     : allW.length > 0
-    ? allW.reduce((a,b)=>a+b,0)/allW.length
+    ? allW.reduce((a,b)=>a+b,0) / allW.length
     : null;
 
-  // 2. 找最高體重：用黃體期後半（週期80-100%段）的均值
+  // 最高體重：黃體期後半（週期54%~82%）均值
   const lutealStart = Math.floor(cycleLen * 0.54);
   const lutealPeak  = Math.floor(cycleLen * 0.82);
-  const peakW_arr   = slots.slice(lutealStart, lutealPeak).flat().filter(v=>!isNaN(v));
+  const peakW_arr   = slots.slice(lutealStart, Math.min(lutealPeak+1, cycleLen)).flat();
   const peakW = peakW_arr.length >= 2
-    ? peakW_arr.reduce((a,b)=>a+b,0)/peakW_arr.length
-    : baseW !== null ? baseW + 1.5 : null; // 無資料時預設+1.5kg
+    ? peakW_arr.reduce((a,b)=>a+b,0) / peakW_arr.length
+    : baseW !== null ? baseW + 1.5 : null;
 
-  if (baseW === null) return { curve: Array(cycleLen).fill(null), baseW: null, peakW: null, dataCount: 0 };
-
-  const amplitude = peakW - baseW; // 整個週期的體重波動幅度
-
-  // 3. 依照圖形的形狀，產出正規化比例（0=最低，1=最高）
-  // 形狀：月經前幾天稍高 → 月經第2-3天最低 → 緩升 → 排卵前小峰 → 小跌 → 黃體期大升 → 月經前最高 → 快速下降
-  function shapeRatio(dayIdx, len) {
-    const t = dayIdx / (len - 1); // 0.0 ~ 1.0
-    // 分段形狀（參考圖片的走勢）
-    if (t < 0.04)  return 0.30; // 第1天：稍低（前次黃體末）
-    if (t < 0.11)  return 0.02; // 第2-3天：最低點（月經出血）
-    if (t < 0.18)  return 0.08; // 第4-5天：仍低
-    if (t < 0.32)  return 0.22; // 第6-9天：緩升
-    if (t < 0.43)  return 0.45; // 第10-12天：持續上升
-    if (t < 0.50)  return 0.55; // 第13天：排卵前小峰
-    if (t < 0.57)  return 0.35; // 第14-15天：排卵後小跌
-    if (t < 0.64)  return 0.38; // 第16-17天：稍低
-    if (t < 0.71)  return 0.55; // 第18-19天：再升
-    if (t < 0.79)  return 0.78; // 第20-21天：黃體期上升
-    if (t < 0.86)  return 1.00; // 第22-23天：最高點（PMS水腫）
-    if (t < 0.93)  return 0.80; // 第24-25天：開始下降
-    return 0.50;                 // 第26-28天：準備新週期
+  if (baseW === null) {
+    return { predictCurve: Array(cycleLen).fill(null),
+             measuredCurve: Array(cycleLen).fill(null),
+             baseW: null, peakW: null, amplitude: 0, dataCount: 0 };
   }
 
-  // 4. 產出每天的「預測體重」
-  // 有實測：用實測值；沒實測：用曲線形狀推算
-  const curve = Array.from({length: cycleLen}, (_, i) => {
-    // 如果 i < 28 且有實測均值，優先用實測
-    if (i < 28 && avgCurve[i] !== null) return avgCurve[i];
-    // 否則用形狀推算
-    return +(baseW + shapeRatio(i, cycleLen) * amplitude).toFixed(2);
+  const amplitude = Math.max(peakW - baseW, 0.3); // 最少0.3kg波動
+
+  // 形狀函數（0=最低, 1=最高），根據圖片的走勢
+  function shapeRatio(t) {
+    if (t < 0.04)  return 0.30;
+    if (t < 0.11)  return 0.02;   // 月經第2-3天最低
+    if (t < 0.18)  return 0.08;
+    if (t < 0.32)  return 0.22;
+    if (t < 0.43)  return 0.45;
+    if (t < 0.50)  return 0.55;   // 排卵前小高峰
+    if (t < 0.57)  return 0.35;   // 排卵後小跌
+    if (t < 0.64)  return 0.38;
+    if (t < 0.71)  return 0.55;
+    if (t < 0.79)  return 0.78;
+    if (t < 0.86)  return 1.00;   // 黃體期最高點
+    if (t < 0.93)  return 0.80;
+    return 0.50;
+  }
+
+  // 預測曲線：全部都用形狀推算，不混入實測值
+  // 但如果某天有實測，就用實測均值「修正」那天的形狀基準
+  // 做法：先算純形狀曲線，再用有實測的天計算「偏移量」，整條曲線平移
+  const shapeCurve = Array.from({length: cycleLen}, (_, i) => {
+    const t = cycleLen === 1 ? 0 : i / (cycleLen - 1);
+    return +(baseW + shapeRatio(t) * amplitude).toFixed(2);
   });
 
-  const dataCount = slots.filter(s=>s.length>0).length;
-  return { curve, baseW: +baseW.toFixed(2), peakW: +peakW.toFixed(2),
-           amplitude: +amplitude.toFixed(2), dataCount };
+  // 計算實測與形狀的平均偏移，讓預測曲線貼近實際體重
+  const offsets = avgCurve
+    .map((v, i) => v !== null ? v - shapeCurve[i] : null)
+    .filter(v => v !== null);
+  const avgOffset = offsets.length > 0
+    ? offsets.reduce((a,b)=>a+b,0) / offsets.length : 0;
+
+  // 預測曲線 = 形狀 + 平均偏移（整條平移校正）
+  const predictCurve = shapeCurve.map(v => +(v + avgOffset).toFixed(2));
+
+  // 實測曲線 = 只有真正量過的天才有值，其餘 null（不連線）
+  const measuredCurve = avgCurve.map(v => v);  // 直接用，null就null
+
+  const dataCount = slots.filter(s => s.length > 0).length;
+  return {
+    predictCurve,
+    measuredCurve,
+    baseW:     +(baseW + avgOffset).toFixed(2),
+    peakW:     +(peakW + avgOffset).toFixed(2),
+    amplitude: +amplitude.toFixed(2),
+    dataCount,
+  };
 }
 
 // ── Render 主控 ────────────────────────────────────────────────
@@ -883,7 +900,7 @@ function renderWeight(c, user) {
 
   // ① 用新的個人化曲線函數
   const personal = buildPersonalWeightCurve(user);
-  const { curve, baseW, peakW, amplitude, dataCount } = personal;
+  const { predictCurve, measuredCurve, baseW, peakW, amplitude, dataCount } = personal;
 
   // ── 標題 ──
   const head = el('div','chart-head');
@@ -904,10 +921,9 @@ function renderWeight(c, user) {
 
   // ── 今日體重預測卡（最重要，放最上面）──
   const curPhase   = dayPhase(day);
-  const todayPred  = curve[day-1];
+  const todayPred  = predictCurve[day-1];
   // 找今天有沒有實測值
-  const todayActual = slots[day-1]?.length > 0
-    ? +(slots[day-1].reduce((a,b)=>a+b,0)/slots[day-1].length).toFixed(1) : null;
+  const todayActual = measuredCurve[day-1];
 
   const todayCard = el('div','today-weight-card');
   todayCard.style.borderColor = curPhase.color;
@@ -950,7 +966,7 @@ function renderWeight(c, user) {
     const phDays    = phSlots.filter(s=>s.length>0).length;
     const totalDays = ph.to - ph.from + 1;
     // 若無實測，從預測曲線取平均
-    const predSlice = curve.slice(ph.from, ph.to+1).filter(v=>v!==null);
+    const predSlice = predictCurve.slice(ph.from, ph.to+1).filter(v=>v!==null);
     const predAvg   = predSlice.length ? +(predSlice.reduce((a,b)=>a+b,0)/predSlice.length).toFixed(1) : null;
     const showAvg   = phAvg ?? predAvg;
     const diff      = (showAvg !== null && globalAvg !== null) ? +(showAvg - globalAvg).toFixed(1) : null;
@@ -1030,7 +1046,7 @@ function renderWeight(c, user) {
     afterDatasetsDraw(chart) {
       // 今日圓點標記
       const {ctx,scales} = chart;
-      const yVal = curve[day-1];
+      const yVal = predictCurve[day-1];
       if(yVal==null)return;
       const x=scales.x.getPixelForValue(day-1);
       const y=scales.y.getPixelForValue(yVal);
@@ -1048,14 +1064,10 @@ function renderWeight(c, user) {
     // ② X軸用使用者真實週期長度（cycleLen 天，不固定28）
     const labels = Array.from({length:cycleLen},(_,i)=>i+1);
 
-    // ③ 拆成「實測點」和「預測線」兩條
-    //    實測：有 slots 資料的天用實測均值，其餘 null（不連線）
-    //    預測：整條完整曲線（虛線，代表本週期預測）
-    const measuredData = Array.from({length:cycleLen},(_,i)=>{
-      const s=slots[i]||[];
-      return s.length>0 ? +(s.reduce((a,b)=>a+b,0)/s.length).toFixed(2) : null;
-    });
-    const predictedData = curve.map(v=>v!==null?+v.toFixed(2):null);
+    // ③ 預測線用 predictCurve（形狀推算，全程連線）
+    //    實測點用 measuredCurve（只有量過的天才有值）
+    const predictedData = predictCurve.map(v=>v!==null?+v.toFixed(2):null);
+    const measuredData  = measuredCurve.map(v=>v!==null?+v.toFixed(2):null);
 
     // y軸範圍：以曲線最低最高自動設定，留一點邊距
     const allVals=[...measuredData,...predictedData].filter(v=>v!==null);
